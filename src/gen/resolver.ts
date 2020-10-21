@@ -118,7 +118,7 @@ export function createResolver(modules: ts.ObjectLiteralExpression) {
               )
             ),
             ts.factory.createReturnStatement(
-              ts.factory.createElementAccessExpression(
+              ts.factory.createPropertyAccessExpression(
                 ts.factory.createIdentifier('module'),
                 ts.factory.createIdentifier('exports')
               )

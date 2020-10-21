@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as ts from 'typescript'
+import { Module, ModuleKind } from './types'
 
 export function resolveFile(file: string): string {
   const absPath = path.resolve(file)
@@ -19,6 +20,19 @@ export function resolveFile(file: string): string {
   }
 
   throw new Error('Cannot find ' + file)
+}
+
+export function resolveModuleName(file: string, context: string): Module {
+  if (file.startsWith('.')) {
+    return {
+      kind: ModuleKind.file,
+      absPath: resolveFile(path.resolve(path.dirname(context), file))
+    }
+  }
+  return {
+    kind: ModuleKind.module,
+    name: file
+  }
 }
 
 export function hasExportModifier(stmt: ts.Statement) {

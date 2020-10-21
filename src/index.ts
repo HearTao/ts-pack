@@ -1,48 +1,64 @@
 import * as fs from 'fs'
-import * as path from 'path'
 import * as ts from 'typescript'
-import { resolveFile } from './utils'
+import { resolveFile, resolveModuleName } from './utils'
 import { createResolver } from './gen/resolver'
 import { bundleModules } from './gen/modules'
+import { BundleInfo, Module, ModuleKind, Options } from './types'
 
-export function pack(entry: string): string {
-  const files: string[] = [entry]
-  const sourceFiles = new Map<string, ts.SourceFile>()
-  const fileDeps = new Map<string, [string, string][]>()
-  const file2IdMap = new Map<string, number>()
+export function pack(entry: string, options?: Options): string {
+  const moduleInfos: Module[] = [
+    {
+      kind: ModuleKind.file,
+      absPath: resolveFile(entry)
+    }
+  ]
+  const bundles = new Map<string, BundleInfo>()
+  const fileDeps = new Map<string, [string, Module][]>()
+  const module2IdMap = new Map<string, number>()
 
   analyze()
-
   const result = bundle()
   return print(result)
 
   function analyze() {
     let id = 0
-    while (files.length) {
-      const file = files.shift()!
-      const absPath = resolveFile(file)
-      if (sourceFiles.has(absPath)) {
-        continue
+    while (moduleInfos.length) {
+      const moduleInfo = moduleInfos.shift()!
+      if (moduleInfo.kind === ModuleKind.module) {
+        if (bundles.has(moduleInfo.name)) {
+          continue
+        }
+        module2IdMap.set(moduleInfo.name, id++)
+        bundles.set(moduleInfo.name, {
+          kind: ModuleKind.module,
+          name: moduleInfo.name
+        })
+      } else {
+        if (bundles.has(moduleInfo.absPath)) {
+          continue
+        }
+
+        module2IdMap.set(moduleInfo.absPath, id++)
+        const content = fs.readFileSync(moduleInfo.absPath).toString()
+        const sourceFile = ts.createSourceFile(
+          moduleInfo.absPath,
+          content,
+          ts.ScriptTarget.Latest
+        )
+        bundles.set(moduleInfo.absPath, {
+          kind: ModuleKind.file,
+          absPath: moduleInfo.absPath,
+          sourceFile
+        })
+        visitImportDeclaration(moduleInfo.absPath, sourceFile)
       }
-
-      file2IdMap.set(absPath, id++)
-
-      const content = fs.readFileSync(absPath).toString()
-      const sourceFile = ts.createSourceFile(
-        absPath,
-        content,
-        ts.ScriptTarget.Latest
-      )
-      sourceFiles.set(absPath, sourceFile)
-
-      visitImportDeclaration(absPath, sourceFile)
     }
   }
 
   function bundle() {
     const modules: ts.PropertyAssignment[] = []
-    sourceFiles.forEach((value, key) => {
-      modules.push(bundleModules(key, value, fileDeps, file2IdMap))
+    bundles.forEach((value, key) => {
+      modules.push(bundleModules(key, value, fileDeps, module2IdMap))
     })
 
     const modulesObject = ts.factory.createObjectLiteralExpression(modules)
@@ -59,7 +75,7 @@ export function pack(entry: string): string {
   }
 
   function visitImportDeclaration(absPath: string, sourceFile: ts.SourceFile) {
-    const deps: [string, string][] = []
+    const deps: [string, Module][] = []
     ts.forEachChild(sourceFile, visitor)
     fileDeps.set(absPath, deps)
 
@@ -69,11 +85,13 @@ export function pack(entry: string): string {
           throw new Error('Invalid module specifier')
         }
 
-        const absDepFile = resolveFile(
-          path.resolve(path.dirname(absPath), node.moduleSpecifier.text)
-        )
-        deps.push([node.moduleSpecifier.text, absDepFile])
-        files.push(absDepFile)
+        const moduleInfo = resolveModuleName(node.moduleSpecifier.text, absPath)
+        if (moduleInfo.kind === ModuleKind.file) {
+          deps.push([node.moduleSpecifier.text, moduleInfo])
+        } else {
+          deps.push([moduleInfo.name, moduleInfo])
+        }
+        moduleInfos.push(moduleInfo)
         return
       }
 
